@@ -1,69 +1,88 @@
-from flask import Flask, request, jsonify, send_file
-from tensorflow import keras
-from keras.models import load_model
-from keras.utils import load_img, img_to_array
-
-from flask_cors import CORS
+import streamlit as st
+import streamlit.components.v1 as components
+import tensorflow as tf
 import numpy as np
-import os
+from PIL import Image
 import datetime
+import os
 import pandas as pd
+import geocoder
 
-app = Flask(__name__)
-CORS(app)
+# Set up page
+st.set_page_config(page_title="🌿 Plant Identifier", layout="centered")
+st.title("🌿 Plant Identifier")
 
-# Load your trained model
-model = load_model("plant_model.h5")
-log_file = "planted_trees.csv"
+# Load model
+@st.cache_resource
+def load_model():
+    return tf.keras.models.load_model("plant_model.h5")
 
-# Create upload directory if it doesn't exist
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+model = load_model()
 
-def preprocess(img_path):
-    img = image.load_img(img_path, target_size=(224, 224))
-    x = image.img_to_array(img)
-    x = np.expand_dims(x, axis=0)
-    x = x / 255.0  # or use mobilenet_v2.preprocess_input if you used that during training
-    return x
+# Class label mapping — update with all classes from your model
+class_labels = {
+    "0": "Abies concolor",
+    "1": "Acer rubrum",
+    "2": "Pinus strobus",
+    "3": "Quercus alba",
+    "4": "Betula papyrifera",
+    "5": "Quercus rubra",
+    "6": "Ulmus americana",
+    "7": "Fraxinus americana",
+    "8": "Tilia americana",
+    "9": "Carya ovata",
+    "170": "Fagus grandifolia"
+}
 
-@app.route("/predict", methods=["POST"])
-def predict():
-    if "file" not in request.files:
-        return jsonify({"error": "No image file provided"}), 400
+log_file = "plant_trees.csv"
+os.makedirs("uploads", exist_ok=True)
 
-    f = request.files["file"]
-    latitude = request.form.get("latitude", "")
-    longitude = request.form.get("longitude", "")
+# Upload image
+uploaded_file = st.file_uploader("Upload a leaf or plant image", type=["jpg", "jpeg", "png"])
 
-    # Ensure filename is safe and unique
+# Auto geolocation from IP
+g = geocoder.ip('me')
+latitude, longitude = "", ""
+if g.ok and g.latlng:
+    latitude, longitude = map(str, g.latlng)
+else:
+    st.warning("⚠️ Could not detect your location automatically.")
+
+# Prediction and logging
+if uploaded_file and latitude and longitude:
+    # Save image
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    filename = f"{timestamp}_{f.filename}"
-    img_path = os.path.join(UPLOAD_FOLDER, filename)
-    f.save(img_path)
+    img_path = os.path.join("uploads", f"{timestamp}_{uploaded_file.name}")
+    with open(img_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
 
-    # Run prediction
-    try:
-        pred = model.predict(preprocess(img_path))
-        prediction = int(np.argmax(pred))  # Convert to int for cleaner JSON
-    except Exception as e:
-        return jsonify({"error": f"Prediction failed: {str(e)}"}), 500
+    # Show uploaded image
+    st.image(img_path, caption="Uploaded Image", use_column_width=True)
 
-    # Log to CSV
-    try:
-        log_entry = pd.DataFrame([[img_path, latitude, longitude, prediction, timestamp]],
-                                 columns=["image_path", "latitude", "longitude", "prediction", "timestamp"])
-        log_entry.to_csv(log_file, mode="a", header=not os.path.exists(log_file), index=False)
-    except Exception as e:
-        return jsonify({"error": f"Logging failed: {str(e)}"}), 500
+    # Preprocess & predict
+    img = Image.open(img_path).resize((224, 224))
+    img_array = np.array(img) / 255.0
+    img_array = np.expand_dims(img_array, axis=0)
 
-    return jsonify({"prediction": prediction})
+    prediction = model.predict(img_array)
+    label = str(np.argmax(prediction))
+    plant_name = class_labels.get(label, "Unknown Plant")
 
-@app.route("/map", methods=["GET"])
-def show_map():
-    if not os.path.exists("reforestation_map.html"):
-        return jsonify({"error": "Map file not found"}), 404
-    return send_file("reforestation_map.html")
+    st.success(f"🌱 Prediction: {plant_name} (class {label})")
 
-if __name__ == "__main__":
-    app.run(debug=False, use_reloader=False)
+    # Log prediction
+    row = pd.DataFrame([[img_path, latitude, longitude, plant_name, timestamp]],
+                       columns=["image_path", "latitude", "longitude", "prediction", "timestamp"])
+    if not os.path.exists(log_file):
+        row.to_csv(log_file, index=False)
+    else:
+        row.to_csv(log_file, mode="a", header=False, index=False)
+
+    # Embed map
+    if os.path.exists("reforestation_map.html"):
+        with open("reforestation_map.html", "r", encoding="utf-8") as f:
+            html_content = f.read()
+            components.html(html_content, height=600, scrolling=True)
+
+else:
+    st.info("Please upload an image and wait for location detection.")
