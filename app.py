@@ -1,156 +1,179 @@
-import os
-import numpy as np
-import pandas as pd
+import streamlit as st
+import streamlit.components.v1 as components
 import tensorflow as tf
-from sklearn.model_selection import train_test_split
-from tensorflow.keras.applications import MobileNetV2
-from tensorflow.keras.layers import GlobalAveragePooling2D, Dense, Dropout, Input
-from tensorflow.keras.models import Model
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
-import json
+import numpy as np
+from PIL import Image
+import datetime
+import os
+import pandas as pd
+import geocoder
+import folium
+from streamlit_folium import folium_static
 
-def parse_leafsnap_metadata(metadata_path, dataset_root):
-    """Parse metadata with proper path validation"""
-    df = pd.read_csv(metadata_path, sep='\t')
-    
-    valid_records = []
-    for _, row in df.iterrows():
-        # Check both image paths
-        img_path = os.path.join(dataset_root, row['image_path'])
-        seg_path = os.path.join(dataset_root, row['segmented_path'])
-        
-        if os.path.exists(img_path):
-            valid_records.append({'path': img_path, 'species': row['species']})
-        elif os.path.exists(seg_path):
-            valid_records.append({'path': seg_path, 'species': row['species']})
-    
-    return pd.DataFrame(valid_records)
+# Set up page with wider layout
+st.set_page_config(page_title="🌿 Plant Identifier", layout="wide")
+st.title("🌿 Plant Identifier")
 
-def load_and_preprocess_image(path, label):
-    """TensorFlow-native image processing without Python conditionals"""
-    try:
-        # Read and decode image
-        img = tf.io.read_file(path)
-        
-        # Use TensorFlow string ops to check extension
-        is_jpeg = tf.strings.regex_full_match(path, ".*\.jpe?g")
-        image = tf.cond(
-            is_jpeg,
-            lambda: tf.image.decode_jpeg(img, channels=3),
-            lambda: tf.image.decode_png(img, channels=3)
-        )
-        
-        # Convert and preprocess
-        image = tf.image.convert_image_dtype(image, tf.float32)
-        image = tf.image.resize_with_pad(image, 224, 224)
-        image = tf.keras.applications.mobilenet_v2.preprocess_input(image)
-        
-        return image, label
-    except Exception as e:
-        # You might log the exception here for debugging purposes
-        return tf.zeros([224, 224, 3], tf.float32), -1
+# Load model
+@st.cache_resource
+def load_model():
+    return tf.keras.models.load_model("plant_model.h5")
 
-def create_dataset(df, batch_size=32, shuffle=True):
-    """Create dataset with known cardinality"""
-    # Create label mapping
-    species = sorted(df['species'].unique())
-    label_map = {s: i for i, s in enumerate(species)}
-    df['label'] = df['species'].map(label_map).astype(np.int32)
-    
-    # 1. EXPLICITLY FILTER INVALID ENTRIES FIRST
-    df = df[df['label'].notna()]
-    
-    # 2. CALCULATE DATASET LENGTH BEFORE CREATION
-    num_samples = len(df)
-    
-    # Create dataset from numpy arrays
-    ds = tf.data.Dataset.from_tensor_slices((df['path'].values, df['label'].values))
-    
-    if shuffle:
-        ds = ds.shuffle(num_samples)
-    
-    # 3. USE KNOWN CARDINALITY
-    ds = ds.apply(tf.data.experimental.assert_cardinality(num_samples))
-    
-    ds = ds.map(load_and_preprocess_image, 
-                num_parallel_calls=tf.data.AUTOTUNE)
-    
-    # 4. BATCH WITH DROP_REMAINDER TO MAINTAIN KNOWN SIZE
-    ds = ds.batch(batch_size, drop_remainder=True)
-    
-    # Prefetch for performance improvement
-    ds = ds.prefetch(tf.data.AUTOTUNE)
-    
-    return ds, num_samples // batch_size
+model = load_model()
 
-def build_model(num_classes):
-    """Create MobileNetV2 model with proper initialization"""
-    base = MobileNetV2(input_shape=(224, 224, 3), 
-                       include_top=False, 
-                       weights='imagenet')
-    base.trainable = False
-    
-    inputs = Input((224, 224, 3))
-    x = base(inputs)
-    x = GlobalAveragePooling2D()(x)
-    x = Dropout(0.2)(x)
-    outputs = Dense(num_classes, activation='softmax')(x)
-    
-    model = Model(inputs, outputs)
-    model.compile(
-        optimizer=Adam(0.001),
-        loss='sparse_categorical_crossentropy',
-        metrics=['accuracy']
-    )
-    return model
+# Class label mapping with more details
+class_labels = {
+    "0": {"name": "Abies concolor", "type": "Conifer"},
+    "1": {"name": "Acer rubrum", "type": "Deciduous"},
+    "2": {"name": "Pinus strobus", "type": "Conifer"},
+    "3": {"name": "Quercus alba", "type": "Deciduous"},
+    "4": {"name": "Betula papyrifera", "type": "Deciduous"},
+    "5": {"name": "Quercus rubra", "type": "Deciduous"},
+    "6": {"name": "Ulmus americana", "type": "Deciduous"},
+    "7": {"name": "Fraxinus americana", "type": "Deciduous"},
+    "8": {"name": "Tilia americana", "type": "Deciduous"},
+    "9": {"name": "Carya ovata", "type": "Deciduous"},
+    "170": {"name": "Fagus grandifolia", "type": "Deciduous"}
+}
 
-def main():
-    # Configuration
-    dataset_root = '/Users/drago/plant_detector/leafsnap-dataset'
-    metadata_path = f"{dataset_root}/leafsnap-dataset-images.txt"
-    
-    try:
-        # 1. Load data
-        print("Loading metadata...")
-        df = parse_leafsnap_metadata(metadata_path, dataset_root)
-        print(f"Loaded {len(df)} valid images")
-        
-        # 2. Split data
-        train_df, val_df = train_test_split(
-            df, test_size=0.2, stratify=df['species'], random_state=42
-        )
-        
-        # 3. Create datasets
-        print("Creating datasets...")
-        train_ds, train_steps = create_dataset(train_df, shuffle=True)
-        val_ds, val_steps = create_dataset(val_df, shuffle=False)
-        
-        # Verify dataset sizes
-        print(f"Training batches: {train_steps}")
-        print(f"Validation batches: {val_steps}")
-        
-        # 4. Build and train model
-        print("Building model...")
-        model = build_model(len(df['species'].unique()))
-        
-        print("Training...")
-        history = model.fit(
-            train_ds,
-            validation_data=val_ds,
-            epochs=15,
-            callbacks=[
-                EarlyStopping(patience=3, restore_best_weights=True),
-                ReduceLROnPlateau(factor=0.1, patience=2)
-            ]
-        )
-        
-        # 5. Save model (you can also save in SavedModel format if preferred)
-        model.save("plant_model.h5")
-        print("Training completed successfully!")
-        
-    except Exception as e:
-        print(f"Error: {str(e)}")
+log_file = "plant_observations.csv"
+os.makedirs("uploads", exist_ok=True)
 
-if __name__ == '__main__':
-    main()
+# Image input section
+st.sidebar.header("Image Input")
+option = st.sidebar.radio("Select input method:", 
+                         ("Upload an image", "Take a photo with camera"),
+                         index=0)
+
+img_file = None
+if option == "Take a photo with camera":
+    img_file = st.sidebar.camera_input("Take a picture of the plant")
+else:
+    img_file = st.sidebar.file_uploader("Upload a plant image", 
+                                       type=["jpg", "jpeg", "png"])
+
+# Main content columns
+col1, col2 = st.columns(2)
+
+# Image display and processing
+with col1:
+    st.subheader("Plant Image")
+    if img_file:
+        # Save image
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        file_ext = "jpg" if option == "Take a photo with camera" else img_file.name.split('.')[-1]
+        img_path = os.path.join("uploads", f"{timestamp}_observation.{file_ext}")
+        
+        with open(img_path, "wb") as f:
+            f.write(img_file.getbuffer())
+
+        # Display image with enhancement options
+        img = Image.open(img_path)
+        st.image(img, caption="Your plant photo", use_column_width=True)
+        
+        # Simple enhancement options
+        enhance = st.selectbox("Enhance image", 
+                             ["Original", "Grayscale", "Contrast"],
+                             index=0)
+        
+        if enhance == "Grayscale":
+            img = img.convert("L")
+        elif enhance == "Contrast":
+            img = ImageEnhance.Contrast(img).enhance(1.5)
+            
+        st.image(img, caption=f"{enhance} view", use_column_width=True)
+
+# Location and prediction
+with col2:
+    st.subheader("Location Data")
+    
+    # Auto geolocation from IP
+    g = geocoder.ip('me')
+    if g.ok and g.latlng:
+        latitude, longitude = g.latlng
+        st.success("📍 Location automatically detected")
+        
+        # Create interactive map
+        m = folium.Map(location=[latitude, longitude], zoom_start=12)
+        folium.Marker(
+            [latitude, longitude],
+            popup="Your location",
+            icon=folium.Icon(color="green", icon="leaf")
+        ).add_to(m)
+        
+        # Display map
+        folium_static(m, width=400, height=300)
+        
+        # Manual override option
+        if st.checkbox("Adjust location manually"):
+            lat = st.number_input("Latitude", 
+                                min_value=-90.0, 
+                                max_value=90.0, 
+                                value=float(latitude))
+            lon = st.number_input("Longitude", 
+                                min_value=-180.0, 
+                                max_value=180.0, 
+                                value=float(longitude))
+            latitude, longitude = lat, lon
+            
+            # Update map with manual location
+            m = folium.Map(location=[latitude, longitude], zoom_start=12)
+            folium.Marker(
+                [latitude, longitude],
+                popup="Adjusted location",
+                icon=folium.Icon(color="red", icon="flag")
+            ).add_to(m)
+            folium_static(m, width=400, height=300)
+    else:
+        st.warning("⚠️ Could not detect your location automatically")
+        latitude, longitude = None, None
+    
+    # Only proceed with prediction if we have both image and location
+    if img_file and latitude is not None and longitude is not None:
+        # Prediction section
+        st.subheader("Plant Identification")
+        with st.spinner('Analyzing plant features...'):
+            img = Image.open(img_path).resize((224, 224))
+            img_array = np.array(img) / 255.0
+            img_array = np.expand_dims(img_array, axis=0)
+            
+            prediction = model.predict(img_array)
+            label = str(np.argmax(prediction))
+            plant_data = class_labels.get(label, {"name": "Unknown Plant", "type": "Unknown"})
+            
+            # Display results in a nice card
+            st.success(f"""
+            **🌱 Identified Plant:** {plant_data['name']}  
+            **🌳 Type:** {plant_data['type']}  
+            **🔍 Confidence:** {np.max(prediction)*100:.1f}%
+            """)
+            
+            # Log observation
+            observation = {
+                "image_path": img_path,
+                "latitude": latitude,
+                "longitude": longitude,
+                "species": plant_data['name'],
+                "plant_type": plant_data['type'],
+                "timestamp": timestamp
+            }
+            
+            if st.button("Save Observation"):
+                df = pd.DataFrame([observation])
+                if not os.path.exists(log_file):
+                    df.to_csv(log_file, index=False)
+                else:
+                    df.to_csv(log_file, mode="a", header=False, index=False)
+                st.success("Observation saved!")
+                
+                # Show recent observations
+                if os.path.exists(log_file):
+                    with st.expander("View recent observations"):
+                        st.dataframe(pd.read_csv(log_file).tail(3))
+
+# Footer with additional info
+st.sidebar.markdown("---")
+st.sidebar.info("""
+This app helps identify plants from photos. 
+All observations contribute to biodiversity research.
+""")
