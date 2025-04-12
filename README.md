@@ -1,6 +1,6 @@
 # 🌱 Plant.Dec
 
-![App Interface](./assets/app-screenshot.png)
+<img width="1456" alt="Screenshot 2025-04-12 at 8 01 39 AM" src="https://github.com/user-attachments/assets/98303831-ff7f-4bdb-95ef-7f998bb701d3" />
 
 A smart plant identification system that combines computer vision and geolocation to recognize tree species from leaf images.
 
@@ -40,7 +40,7 @@ A smart plant identification system that combines computer vision and geolocatio
 - 🧠 Model interpretability (Grad-CAM)
 
 ## 🎥 Demo
-<img width="1456" alt="Screenshot 2025-04-12 at 8 01 39 AM" src="https://github.com/user-attachments/assets/98303831-ff7f-4bdb-95ef-7f998bb701d3" />
+
 
 [![Video Demo](https://img.youtube.com/vi/YOUR_VIDEO_ID/0.jpg)](https://youtu.be/YOUR_VIDEO_ID)
 
