@@ -1,16 +1,59 @@
-# 🌿 LeafSnap Plant Classifier
+# 🌱 Plant.Dec
 
-A deep learning project using MobileNetV2 to classify plant species from the LeafSnap dataset.
+![App Interface](./assets/app-screenshot.png)
 
-## 📁 Structure
+A smart plant identification system that combines computer vision and geolocation to recognize tree species from leaf images.
 
-- `main.py` - Trains the model using MobileNetV2.
-- `test_model.py` - Tests the trained model on sample images.
-- `plant_model.h5` - Saved model after training.
-- `leafsnap-dataset/` - (Excluded from Git) Dataset used for training.
+## Table of Contents
+- [Features](#-features)
+- [Demo](#-demo)
+- [Dataset](#-dataset)
+- [Installation](#-installation)
+- [Usage](#-usage)
+- [Configuration](#-configuration)
+- [Model Details](#-model-details)
+- [API Reference](#-api-reference)
+- [Contributing](#-contributing)
+- [License](#-license)
 
-## 🛠️ How to Use
+## ✨ Features
 
-```bash
-python re.ipynb          # To train the model
-python test_model.py    # To test predictions
+### Image Processing
+- 📸 Real-time camera capture
+- 🖼️ Image upload (JPG, PNG)
+- 🌐 URL image loading
+- 🛠️ Image enhancement tools
+  - Grayscale conversion
+  - Contrast adjustment
+  - Edge detection
+
+### Geolocation
+- 🌍 Automatic IP-based location detection
+- 🗺️ Interactive Folium maps
+- 📍 Manual location adjustment
+- 🕒 Timezone-aware timestamps
+
+### AI Capabilities
+- 🔍 Multi-species identification
+- 📊 Confidence scoring
+- 🏆 Top-5 predictions display
+- 🧠 Model interpretability (Grad-CAM)
+
+## 🎥 Demo
+
+[![Video Demo](https://img.youtube.com/vi/YOUR_VIDEO_ID/0.jpg)](https://youtu.be/YOUR_VIDEO_ID)
+
+## 📂 Dataset
+
+Using the [LeafSnap Dataset](https://www.kaggle.com/datasets/xhlulu/leafsnap-dataset):
+
+| Dataset Split | Images | Species |
+|--------------|--------|---------|
+| Lab          | 7,719  | 185     |
+| Field        | 23,147 | 185     |
+| **Total**    | 30,866 | 185     |
+
+**Sample Species Classes:**
+```python
+['Acer rubrum', 'Quercus alba', 'Pinus strobus', 
+ 'Fagus grandifolia', 'Betula papyrifera', ...]
